@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/YTCommentAnalysis.iml" filepath="$PROJECT_DIR$/.idea/YTCommentAnalysis.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/yt-comment-behavior-analysis.iml" filepath="$PROJECT_DIR$/.idea/yt-comment-behavior-analysis.iml" />
     </modules>
   </component>
 </project>

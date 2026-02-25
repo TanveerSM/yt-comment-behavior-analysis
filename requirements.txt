@@ -1,3 +1,5 @@
 requests
 pandas
 numpy
+transformers
+torch --index-url https://download.pytorch.org/whl/cu121

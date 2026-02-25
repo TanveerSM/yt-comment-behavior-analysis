@@ -1,7 +1,7 @@
 # sentiment.py
 
 from transformers import pipeline
-from database import fetch_comments_by_video, update_comment_sentiment
+from src.database import fetch_comments_by_video, update_comment_sentiment
 
 # Load once globally (important)
 sentiment_pipeline = pipeline(
