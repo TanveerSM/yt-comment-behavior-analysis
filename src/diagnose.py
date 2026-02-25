@@ -1,0 +1,2 @@
+from analysis.sentiment import sentiment_pipeline
+print(sentiment_pipeline)

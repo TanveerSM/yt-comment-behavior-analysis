@@ -1,0 +1,1 @@
+from src.analysis.sentiment  import add_sentiment_to_video
