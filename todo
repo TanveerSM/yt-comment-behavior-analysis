@@ -1,1 +1,3 @@
 dont retrieve all comments again, only retrieve new ones
+perUserBehavioralSummary
+activityBurstPerUser
