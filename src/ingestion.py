@@ -1,8 +1,6 @@
 import requests
 import time
-
-YOUTUBE_API_URL = "https://www.googleapis.com/youtube/v3/commentThreads"
-
+from config import YTAPIURL
 
 def fetch_comments(api_key, video_id, page_token=None):
     params = {
@@ -16,7 +14,7 @@ def fetch_comments(api_key, video_id, page_token=None):
         params["pageToken"] = page_token
 
     try:
-        response = requests.get(YOUTUBE_API_URL, params=params)
+        response = requests.get(YTAPIURL, params=params)
         response.raise_for_status()
         return response.json()
 
@@ -38,6 +36,7 @@ def fetch_all_comments(api_key, video_id):
         all_items.extend(items)
 
         page_token = data.get("nextPageToken")
+        time.sleep(0.1)
         if not page_token:
             break
 

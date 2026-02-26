@@ -6,10 +6,7 @@ DB_PATH = "../data/comments.db"
 
 
 def init_db():
-    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "comments.db")
-    DB_PATH = os.path.abspath(DB_PATH)
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
@@ -24,9 +21,28 @@ def init_db():
     )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS window_metrics(
+            video_id TEXT,
+            window_start TEXT,
+            total_comments INTEGER,
+            unique_authors INTEGER,
+            avg_length REAL,
+            avg_sentiment REAL,
+            sentiment_variance REAL,
+            coordination_score REAL,
+            PRIMARY KEY (video_id, window_start)
+        )
+        """)
+
     conn.commit()
     conn.close()
 
+def get_connection():
+    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "comments.db")
+    DB_PATH = os.path.abspath(DB_PATH)
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    return sqlite3.connect(DB_PATH)
 
 def insert_comment(comment):
     """
@@ -34,10 +50,7 @@ def insert_comment(comment):
     Expects keys:
       comment_id, video_id, author_id, text, published_at, fetched_at
     """
-    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "comments.db")
-    DB_PATH = os.path.abspath(DB_PATH)
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cur = conn.cursor()
 
     try:
@@ -48,17 +61,19 @@ def insert_comment(comment):
             author_id,
             text,
             published_at,
-            fetched_at
+            fetched_at,
+            sentiment
         )
-        VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            comment["comment_id"],
-            comment["video_id"],
-            comment["author_id"],
-            comment["text"],
-            comment["published_at"],
-            comment["fetched_at"],
-        ))
+        VALUES (
+            :comment_id, 
+            :video_id, 
+            :author_id, 
+            :text, 
+            :published_at, 
+            :fetched_at, 
+            :sentiment
+        )
+        """, comment)
 
         conn.commit()
 
@@ -85,10 +100,7 @@ def get_window_metrics(start_time, end_time, video_id=None):
         - sentiment_variance
     """
 
-    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "comments.db")
-    DB_PATH = os.path.abspath(DB_PATH)
-
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cur = conn.cursor()
 
     where_clause = "AND video_id = ?" if video_id else ""
@@ -129,21 +141,22 @@ def get_window_metrics(start_time, end_time, video_id=None):
         "avg_sentiment": row[3] or 0,
         "sentiment_variance": sentiment_variance
     }
-def get_all_window_metrics(video_id=None):
-    DB_PATH = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "data", "comments.db")
-    )
-
-    conn = sqlite3.connect(DB_PATH)
+def get_all_window_metrics(video_id=None, polling_rate=600):
+    conn = get_connection()
     cur = conn.cursor()
 
     where_clause = "WHERE video_id = ?" if video_id else ""
     params = (video_id,) if video_id else ()
 
+    # build window expression with polling_rate
+    window_expr = (
+        f"datetime((strftime('%s', published_at) / {polling_rate}) * {polling_rate}, 'unixepoch')"
+    )
+
     query = f"""
         SELECT
             video_id,
-            datetime((strftime('%s', published_at) / 300) * 300, 'unixepoch') AS window,
+            {window_expr} AS window,
             COUNT(*) AS total_comments,
             COUNT(DISTINCT author_id) AS unique_authors,
             AVG(LENGTH(text)) AS avg_length,
@@ -163,17 +176,18 @@ def get_all_window_metrics(video_id=None):
         video = r[0]
         window = r[1]
 
-        # fetch sentiments for this window only
-        cur.execute("""
+        # same window expression for sentiment lookup
+        sentiment_window_expr = window_expr
+
+        cur.execute(f"""
             SELECT sentiment
             FROM comments
             WHERE video_id = ?
-              AND datetime((strftime('%s', published_at) / 300) * 300, 'unixepoch') = ?
+              AND {sentiment_window_expr} = ?
               AND sentiment IS NOT NULL
         """, (video, window))
 
         sentiments = [s[0] for s in cur.fetchall()]
-
         variance = statistics.pvariance(sentiments) if len(sentiments) > 1 else 0
 
         results.append({
@@ -189,12 +203,12 @@ def get_all_window_metrics(video_id=None):
     conn.close()
     return results
 
+    conn.close()
+    return results
+
 
 def fetch_comments_by_video(video_id):
-    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "comments.db")
-    DB_PATH = os.path.abspath(DB_PATH)
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cur = conn.cursor()
 
 
@@ -212,20 +226,72 @@ def fetch_comments_by_video(video_id):
         for row in rows
     ]
 
+def insert_window_metrics(metrics):
+    """
+    Insert or update window metrics.
 
-def update_comment_sentiment(comment_id, sentiment):
-    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "comments.db")
-    DB_PATH = os.path.abspath(DB_PATH)
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    Expects metrics dict with keys:
+      video_id
+      window
+      total_comments
+      unique_authors
+      avg_length
+      avg_sentiment
+      sentiment_variance
+      coordination_score
+    """
+
+    conn = get_connection()
     cur = conn.cursor()
-
+    normalized_window = normalize_window(metrics["window"])
     cur.execute("""
-        UPDATE comments
-        SET sentiment = ?
-        WHERE comment_id = ?
-    """, (sentiment, comment_id))
+    INSERT INTO window_metrics (
+        video_id,
+        window_start,
+        total_comments,
+        unique_authors,
+        avg_length,
+        avg_sentiment,
+        sentiment_variance,
+        coordination_score
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(video_id, window_start) DO UPDATE SET
+        total_comments = excluded.total_comments,
+        unique_authors = excluded.unique_authors,
+        avg_length = excluded.avg_length,
+        avg_sentiment = excluded.avg_sentiment,
+        sentiment_variance = excluded.sentiment_variance,
+        coordination_score = excluded.coordination_score;
+    """, (
+        metrics["video_id"],
+        normalized_window,
+        metrics["total_comments"],
+        metrics["unique_authors"],
+        metrics["avg_length"],
+        metrics["avg_sentiment"],
+        metrics["sentiment_variance"],
+        metrics.get("coordination_score"),
+    ))
 
     conn.commit()
     conn.close()
 
+def normalize_window(window_str):
+    """
+    Normalize window timestamp to SQLite-friendly format:
+    'YYYY-MM-DD HH:MM:SS'
+
+    Accepts ISO timestamps with T/Z or SQLite format.
+    """
+    try:
+        # handle ISO with timezone: 2026-02-26T20:38:35+00:00
+        dt = datetime.fromisoformat(window_str.replace("Z", "+00:00"))
+    except Exception:
+        try:
+            # already SQLite-style
+            dt = datetime.strptime(window_str, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return window_str  # fallback (should rarely happen)
+
+    return dt.strftime("%Y-%m-%d %H:%M:%S")

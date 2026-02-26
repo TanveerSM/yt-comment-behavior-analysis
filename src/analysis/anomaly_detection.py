@@ -1,4 +1,3 @@
-
 from rollingbaseline import RollingBaseline
 
 baseline = RollingBaseline(max_windows=20, warmup=10)
