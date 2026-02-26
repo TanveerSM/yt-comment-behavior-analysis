@@ -3,25 +3,26 @@ from datetime import datetime, timezone
 from database import init_db, insert_comment, get_window_metrics
 from ingestion import fetch_all_comments, parse_comment
 from config import YTAPI
-from baseline import BaselineModel
-from deviation import deviation_scores
+from analysis.rollingbaseline import RollingBaseline
+from analysis.statistics import deviation_scores
 from scoring import anomaly_score
 import time
 
 API_KEY = YTAPI
-VIDEOS = ["aU7v87EhDBI"]
+VIDEOS = ["7swlkU_JfN4"]
 
 POLL_INTERVAL = 600  # 10 minutes
 
-def main():
+def main(test_mode=False):
     if not API_KEY:
         raise RuntimeError("YOUTUBE_API_KEY not set in environment")
 
     init_db()
     last_window_start = datetime.now(timezone.utc)
-    baseline = BaselineModel()
+    baseline = RollingBaseline()
 
     while True:
+
         window_start = last_window_start
         window_end = datetime.now(timezone.utc)
 
@@ -39,21 +40,20 @@ def main():
             window_end.isoformat()
         )
         baseline.update(metrics)
-        stats = baseline.stats()
-        deviations = deviation_scores(metrics, stats)
-        score = anomaly_score(deviations)
-
+        z = baseline.evaluate(metrics)
+        if z:
+            score = baseline.coordination_score(z)
+        else:
+            score = None
+        print("coordination score:", score)
         print(f"Window {window_start} → {window_end}")
-
-        if stats["mean_count"] > 0 and metrics["total_comments"] > stats["mean_count"] * 3:
-            print("volume spike")
-
-        print("baseline:", baseline.stats())
         print(metrics)
         print("---")
 
         # 3) update window and sleep
         last_window_start = window_end
+        if test_mode:
+            break  # run only once
         time.sleep(POLL_INTERVAL)
 
 
