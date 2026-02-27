@@ -3,7 +3,7 @@
 A window-based analytics engine designed to detect anomalous engagement patterns and coordinated activity in YouTube comment streams. 
 
 ## Overview
-Unlike standard sentiment tools, this system implements a dual-phase pipeline to reconstruct historical behavior and monitor live streams. By segmenting data into discrete time windows, the engine identifies statistically significant deviations in user behavior, timing, and sentiment uniformity.
+Unlike standard sentiment tools, this system implements a dual-phase pipeline to reconstruct historical behavior and monitor live streams. By slicing data into discrete 10-minute windows, the engine identifies statistically significant deviations using a rolling Z-score calculated against a sliding 20-window baseline.
 
 ## Core Architecture
 
@@ -14,25 +14,29 @@ graph LR
     subgraph Engine [Analytics Pipeline]
     Mode -- Historical --> Win[Time Windowing]
     Mode -- Live --> Poll[Delta Polling]
-    
     Win & Poll --> NLP[Sentiment + Z-Scores]
     end
 
-    NLP --> Out([Anomaly Alerts])
+    NLP --> DB[(SQLite DB)]
+    DB --> Detect[Pattern Detection]
+    Detect --> Out([Anomaly Alerts])
 
+    %% Styling for readability on Dark/Light modes
     style Out fill:#00ff9d,stroke:#000,stroke-width:2px,color:#000
+    style DB fill:#444,stroke:#fff,stroke-width:1px,color:#fff
+    style Mode fill:#333,stroke:#ccc,stroke-width:1px,color:#fff
 
 ```
 
 ### Phase 1: Historical Reconstruction
 *   **Full Backfill:** Performs a complete historical fetch of all comments since video publication.
-*   **Temporal Segmentation:** Aggregates activity into fixed 10-minute windows for baseline establishment.
+*   **Time Windowing:** Slices historical data into 10-minute segments to "replay" the timeline and populate the initial database state.
 *   **Metric Computation:** Calculates behavioral and sentiment-based signals per window.
 
 ### Phase 2: Continuous Live Monitoring
 *   **Delta Polling:** Polls the [YouTube Data API](https://developers.google.com) at 10-minute intervals for new data.
 *   **Stream Processing:** New comments are injected into the same parsing pipeline to update rolling baselines.
-*   **Anomaly Detection:** Triggers alerts when incoming data deviates from historical Z-scores.
+*   **Anomaly Detection:** Triggers alerts when incoming data deviates from rolling baseline Z-scores.
 
 ## Analytics & Metrics
 The system stores data in `window_metrics` including:
@@ -55,4 +59,5 @@ The engine is tuned to flag specific engagement signatures:
 *   **NLP:** Sentiment computed via [Hugging Face Transformers](https://huggingface.co).
 *   **Data Handling:** [Pandas](https://pandas.pydata.org) for window aggregation and rolling statistics.
 *   **Statistical Logic:** Normalization via rolling Z-scores to identify outliers.
+*   **Storage:** SQLite for persistent metric storage and baseline retrieval.
 
