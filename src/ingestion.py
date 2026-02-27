@@ -44,8 +44,6 @@ def fetch_all_comments(api_key, video_id, stop_at_id=None):
         if not page_token:
             break
 
-        time.sleep(0.1)
-
     return all_items
 
 

@@ -8,7 +8,7 @@ from analysis.abnormal_patterns import detect_abnormal_patterns
 import time
 
 API_KEY = YTAPI
-VIDEOS = ["SKUJHX5o0j4"]
+VIDEOS = ["ArWeoIK3Idc"]
 
 POLL_INTERVAL = 600  # 10 minutes
 
@@ -68,7 +68,7 @@ def main(test_mode=False):
             if metrics["total_comments"] > 0:
                 z = baseline.evaluate(metrics)
                 if z:
-                    detect_abnormal_patterns(z, video_id, metrics)
+                    detect_abnormal_patterns(z, metrics, video_id)
 
 
                     score = baseline.coordination_score(z)
@@ -110,35 +110,22 @@ def replay_historical(baseline, video_id=None):
         return
 
     for w in windows:
-        # w contains:
-        # video_id, window, total_comments, unique_authors,
-        # avg_length, avg_sentiment, sentiment_variance
-
+        # 1. INITIALIZE SCORE (Prevents the UnboundLocalError)
+        score = 0.0
 
         z = baseline.evaluate(w)
 
         if z:
-            # --- TEST THE ALERTS AGAINST HISTORY ---
-            # This will print alerts for past events as the script 're-lives' them
-            detect_abnormal_patterns(z, video_id, w)
-            # ----------------------------------------
-
+            # 2. CALCULATE SCORE
             score = baseline.coordination_score(z)
-        else:
-            score = None
 
-        print(f"Replayed window {w['window']}: total_comments={w['total_comments']} unique_authors={w['unique_authors']} score={score}")
+            # 3. RUN ALERTS (Pass the score to the metrics dict so the alert can see it)
+            w["coordination_score"] = score
+            detect_abnormal_patterns(z, w, video_id)
+
+        # 4. SAVE & UPDATE (Score is now guaranteed to be at least 0.0)
         w["coordination_score"] = score
-        insert_window_metrics({
-            "video_id": w["video_id"],
-            "window": w["window"],
-            "total_comments": w["total_comments"],
-            "unique_authors": w["unique_authors"],
-            "avg_length": w["avg_length"],
-            "avg_sentiment": w["avg_sentiment"],
-            "sentiment_variance": w["sentiment_variance"],
-            "coordination_score": score
-        })
+        insert_window_metrics(w)
         baseline.update(w)
 
     print("Historical replay complete.")

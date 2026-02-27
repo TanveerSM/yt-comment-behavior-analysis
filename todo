@@ -1,4 +1,2 @@
-dont retrieve all comments again, only retrieve new ones
 perUserBehavioralSummary
 activityBurstPerUser
-sentiment is not calculated during first run of historical replay
