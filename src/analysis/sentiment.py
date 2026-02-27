@@ -1,15 +1,11 @@
-# sentiment.py
-
 from transformers import pipeline, AutoTokenizer
 
-
-# Explicitly tell PyCharm this is a PreTrainedTokenizer
 my_tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
 
 sentiment_pipeline = pipeline(
     "sentiment-analysis",
     model="distilbert-base-uncased-finetuned-sst-2-english",
-    tokenizer=my_tokenizer, # Pass specific object
+    tokenizer=my_tokenizer,
     device=0
 )  # type: ignore
 

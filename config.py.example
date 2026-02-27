@@ -1,0 +1,20 @@
+YTAPI = "YOUR_YOUTUBE_API_KEY_HERE"
+YTAPIURL = "https://www.googleapis.com/youtube/v3/commentThreads"
+
+# --- Rolling Baseline Settings ---
+MAX_WINDOWS = 20    # How many 10-minute blocks to remember
+WARMUP_PERIOD = 10  # Don't alert until we have this many blocks
+NOISE_FLOOR = 1.2   # Ignore Z-scores below this (normal human jitter)
+
+# --- Coordination Score Weights (Must sum to 1.0) ---
+# These are "Hyperparameters" you can tune based on your data tests
+WEIGHTS = {
+    "concentration": 0.40,  # Comments per Author (The "Sybil" signal)
+    "gap_variance": 0.30,   # Robotic Timing (The "Automation" signal)
+    "sentiment_var": 0.20,  # Sentiment Uniformity (The "Propaganda" signal)
+    "count": 0.10,          # Volume Spikes (The "Viral" signal)
+}
+# --- Directional Bias ---
+# How much to multiply a "Robotic" (negative) gap variance signal
+ROBOTIC_PENALTY_MULTIPLIER = 1.5
+ROBOTIC_THRESHOLD = -2.0  # Only boost if it's significantly robotic

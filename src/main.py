@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from database import init_db, insert_comment, get_window_metrics, get_all_window_metrics, insert_window_metrics
+from database import init_db, insert_comments_batch, get_window_metrics, get_all_window_metrics, insert_window_metrics
 from ingestion import fetch_all_comments, parse_comment
 from config import YTAPI
 from analysis.rollingbaseline import RollingBaseline
@@ -8,7 +8,7 @@ from analysis.abnormal_patterns import detect_abnormal_patterns
 import time
 
 API_KEY = YTAPI
-VIDEOS = ["ArWeoIK3Idc"]
+VIDEOS = ["o2BppJJintA"]
 
 POLL_INTERVAL = 600  # 10 minutes
 
@@ -76,6 +76,7 @@ def main(test_mode=False):
                     score = None
 
                 metrics["coordination_score"] = score
+
                 insert_window_metrics({
                     "video_id": video_id,
                     "window": last_window_start.strftime('%Y-%m-%d %H:%M:%S'),
@@ -84,8 +85,11 @@ def main(test_mode=False):
                     "avg_length": metrics.get("avg_length", 0),
                     "avg_sentiment": metrics.get("avg_sentiment", 0),
                     "sentiment_variance": metrics.get("sentiment_variance", 0),
+                    "avg_gap": metrics.get("avg_gap", 0),
+                    "gap_variance": metrics.get("gap_variance", 0),
                     "coordination_score": score
                 })
+
                 baseline.update(metrics)
 
         last_window_start = window_end  # Move the window forward
@@ -132,21 +136,28 @@ def replay_historical(baseline, video_id=None):
 
 
 def process_and_save_comments(items, video_id):
-    """Parses, analyzes, and saves a batch of comments."""
-    # 1. Parse raw API items into your comment dicts
+    # 1. Parse API items
     comments = [parse_comment(item, video_id) for item in items]
+    comments = [c for c in comments if c is not None]
 
     if not comments:
         return []
 
-    # 2. Batch-process sentiment using your GPU pipeline
-    texts = [c["text"] for c in comments]
-    results = sentiment_pipeline(texts, batch_size=32, truncation=True, max_length=512)
+    # 2. Batch-process sentiment
+    valid_comments = [c for c in comments if c["text"].strip()]
+    if valid_comments:
+        texts = [c["text"] for c in valid_comments]
+        results = sentiment_pipeline(texts, batch_size=32, truncation=True, max_length=512)
 
-    for comment, result in zip(comments, results):
-        # 3. Add the score to the dict and save to DB
-        comment["sentiment"] = sentiment_score(result)
-        insert_comment(comment)
+        for comment, result in zip(valid_comments, results):
+            comment["sentiment"] = sentiment_score(result)
+
+    # 3. Ensure every comment has a sentiment key before DB insert, even those that were invalid
+    for comment in comments:
+        comment.setdefault("sentiment", 0.0)
+
+    # 4. ONE database trip for the entire batch (Way faster!)
+    insert_comments_batch(comments)
 
     return comments
 

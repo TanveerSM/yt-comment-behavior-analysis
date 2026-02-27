@@ -48,7 +48,11 @@ def fetch_all_comments(api_key, video_id, stop_at_id=None):
 
 
 def parse_comment(item, video_id):
-    snippet = item["snippet"]["topLevelComment"]["snippet"]
+    top_level = item.get("snippet", {}).get("topLevelComment", {})
+    snippet = top_level.get("snippet", {})
+
+    if not snippet:
+        return None
 
     return {
         "comment_id": item["id"],

@@ -1,6 +1,5 @@
 import sqlite3
 import os
-import statistics
 from datetime import datetime
 
 
@@ -44,13 +43,13 @@ def init_db():
             avg_length REAL,
             avg_sentiment REAL,
             sentiment_variance REAL,
-            avg_gap REAL,           -- NEW: For Burst Analysis
-            gap_variance REAL,      -- NEW: For Rhythm Detection
+            avg_gap REAL,           
+            gap_variance REAL,      
             coordination_score REAL,
             PRIMARY KEY (video_id, window_start)
         )
     """)
-
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_vid_time ON comments (video_id, published_at)")
     conn.commit()
     conn.close()
 
@@ -59,46 +58,26 @@ def get_connection():
     return sqlite3.connect(DB_PATH)
 
 
-def insert_comment(comment):
-    # 1. Normalize timestamps to your preferred ISO format before inserting
-    # This ensures your BETWEEN queries in get_window_metrics always find matches.
-    comment["published_at"] = normalize_window(comment["published_at"])
-    comment["fetched_at"] = normalize_window(comment["fetched_at"])
-
+def insert_comments_batch(comments):
+    """Inserts a list of comments in a single transaction"""
     conn = get_connection()
     cur = conn.cursor()
 
+    # Normalization happens in a list comprehension
+    for c in comments:
+        c["published_at"] = normalize_window(c["published_at"])
+        c["fetched_at"] = normalize_window(c["fetched_at"])
+
     try:
-        cur.execute("""
-        INSERT INTO comments (
-            comment_id,
-            video_id,
-            author_id,
-            text,
-            published_at,
-            fetched_at,
-            sentiment
-        )
-        VALUES (
-            :comment_id, 
-            :video_id, 
-            :author_id, 
-            :text, 
-            :published_at, 
-            :fetched_at, 
-            :sentiment
-        )
-        """, comment)
-
-        conn.commit() # Safely saves the changes
-
-    except sqlite3.IntegrityError:
-        # Handles duplicate comment_ids if you fetch the same data twice
-        pass
-
+        # IGNORE handles the IntegrityError (duplicates) automatically in SQL
+        cur.executemany("""
+                        INSERT OR IGNORE INTO comments (comment_id, video_id, author_id, text, published_at, fetched_at,
+                                                        sentiment)
+                        VALUES (:comment_id, :video_id, :author_id, :text, :published_at, :fetched_at, :sentiment)
+                        """, comments)
+        conn.commit()
     finally:
         conn.close()
-
 
 
 def get_window_metrics(start_time, end_time, video_id=None):
@@ -114,32 +93,54 @@ def get_window_metrics(start_time, end_time, video_id=None):
         where_clause += " AND video_id = ?"
         params.append(video_id)
 
+
     query = f"""
         WITH Gaps AS (
-            SELECT *, 
+            SELECT 
+                video_id,
+                author_id,
+                sentiment,
+                LENGTH(text) as text_len,
                 unixepoch(published_at) - LAG(unixepoch(published_at)) OVER (ORDER BY published_at) AS gap
             FROM comments
             {where_clause}
         )
-        SELECT {METRIC_COLUMNS} FROM Gaps WHERE gap IS NOT NULL
+        SELECT 
+            video_id,                                   -- Index 0
+            '{norm_start}',                             -- Index 1 (The window label)
+            COUNT(*) AS total_comments,                 -- Index 2
+            COUNT(DISTINCT author_id) AS unique_authors, -- Index 3
+            AVG(text_len),                              -- Index 4
+            AVG(sentiment),                             -- Index 5
+            MAX(0.0, AVG(sentiment * sentiment) - (AVG(sentiment) * AVG(sentiment))), -- Index 6
+            AVG(gap),                                   -- Index 7
+            MAX(0.0, AVG(gap * gap) - (AVG(gap) * AVG(gap))) -- Index 8
+        FROM Gaps
     """
 
     cur.execute(query, params)
-    row = cur.fetchone()
+    r = cur.fetchone()
     conn.close()
 
-    if not row or row[0] == 0:
-        return {"window": norm_start, "total_comments": 0, "unique_authors": 0, "avg_length": 0, "avg_sentiment": 0, "sentiment_variance": 0, "avg_gap": 0, "gap_variance": 0}
+    # Safety check: If no comments found
+    if not r or r[2] == 0:
+        return {
+            "video_id": video_id, "window": norm_start, "total_comments": 0,
+            "unique_authors": 0, "avg_length": 0, "avg_sentiment": 0,
+            "sentiment_variance": 0, "avg_gap": 0, "gap_variance": 0
+        }
+
 
     return {
-        "window": norm_start,
-        "total_comments": row[0],
-        "unique_authors": row[1],
-        "avg_length": row[2] or 0,
-        "avg_sentiment": row[3] or 0,
-        "sentiment_variance": max(0.0, row[4]) if row[4] is not None else 0.0,
-        "avg_gap": row[5] or 0,
-        "gap_variance": max(0.0, row[6]) if row[6] is not None else 0.0
+        "video_id": r[0],
+        "window": r[1],
+        "total_comments": r[2],
+        "unique_authors": r[3],
+        "avg_length": r[4] or 0,
+        "avg_sentiment": r[5] or 0,
+        "sentiment_variance": max(0.0, r[6]) if r[6] is not None else 0.0,
+        "avg_gap": r[7] or 0,
+        "gap_variance": max(0.0, r[8]) if r[8] is not None else 0.0
     }
 
 
@@ -158,8 +159,8 @@ def get_all_window_metrics(video_id=None, polling_rate=600):
         WITH TimedComments AS (
             SELECT 
                 video_id, 
-                author_id,  -- <--- ADDED THIS LINE
-                sentiment, 
+                author_id,
+                sentiment,
                 LENGTH(text) as text_len,
                 unixepoch(published_at) as ts,
                 unixepoch(published_at) - LAG(unixepoch(published_at)) OVER (

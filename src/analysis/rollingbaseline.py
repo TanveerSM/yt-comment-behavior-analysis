@@ -1,21 +1,26 @@
 from collections import deque
 import statistics
+from config import WEIGHTS, NOISE_FLOOR, ROBOTIC_PENALTY_MULTIPLIER, ROBOTIC_THRESHOLD, MAX_WINDOWS, WARMUP_PERIOD
 
 
 class RollingBaseline:
-    def __init__(self, max_windows=20, warmup=10):
+    def __init__(self, max_windows=MAX_WINDOWS, warmup=WARMUP_PERIOD):
+        """
+        Initializes the sliding window memory using values from config.py.
+        """
         self.max_windows = max_windows
         self.warmup = warmup
+
+        # Using a dictionary of deques to track the rolling state of each metric
         self.history = {
-            "counts": deque(maxlen=max_windows),
-            "authors": deque(maxlen=max_windows),
-            "lengths": deque(maxlen=max_windows),
-            "sentiments": deque(maxlen=max_windows),
-            "concentration": deque(maxlen=max_windows),
-            "sentiment_var": deque(maxlen=max_windows),
-            # NEW: Timing deques
-            "avg_gaps": deque(maxlen=max_windows),
-            "gap_vars": deque(maxlen=max_windows),
+            "counts": deque(maxlen=self.max_windows),
+            "authors": deque(maxlen=self.max_windows),
+            "lengths": deque(maxlen=self.max_windows),
+            "sentiments": deque(maxlen=self.max_windows),
+            "concentration": deque(maxlen=self.max_windows),
+            "sentiment_var": deque(maxlen=self.max_windows),
+            "avg_gaps": deque(maxlen=self.max_windows),
+            "gap_vars": deque(maxlen=self.max_windows),
         }
 
     def update(self, metrics):
@@ -26,7 +31,6 @@ class RollingBaseline:
         self.history["sentiments"].append(metrics.get("avg_sentiment", 0))
         self.history["concentration"].append(metrics.get("total_comments", 0) / authors)
         self.history["sentiment_var"].append(metrics.get("sentiment_variance", 0))
-        # NEW: Append timing metrics
         self.history["avg_gaps"].append(metrics.get("avg_gap", 0))
         self.history["gap_vars"].append(metrics.get("gap_variance", 0))
 
@@ -58,17 +62,31 @@ class RollingBaseline:
         }
 
     @staticmethod
-    def coordination_score(z):
+    def _dampen(val):
+        """Reduces the impact of 'normal' fluctuations (Z < NOISE_FLOOR)."""
+        abs_val = abs(val)
+        return abs_val if abs_val > NOISE_FLOOR else (abs_val * 0.1)
+
+    def coordination_score(self, z):
         if z is None:
             return None
 
-        # Refined weights including the 'Robot' (gap_var) factor
-        # A deep negative gap_var_z (timing becoming too perfect) heavily flags coordination
-        return (
-                abs(z["concentration_z"]) * 0.30 +
-                abs(z["sentiment_var_z"]) * 0.20 +
-                abs(z["gap_var_z"]) * 0.20 +
-                abs(z["sentiment_z"]) * 0.15 +
-                abs(z["count_z"]) * 0.10 +
-                abs(z["length_z"]) * 0.05
+        # 1. Process Gap Variance (The 'Robot' vs 'Chaos' logic)
+        gap_z = z["gap_var_z"]
+        gap_signal = self._dampen(gap_z)
+
+        # Apply the "Robotic Bias": boost only if it's significantly negative
+        if gap_z < ROBOTIC_THRESHOLD:
+            gap_signal *= ROBOTIC_PENALTY_MULTIPLIER
+
+        # 2. Calculate Weighted Composite Score
+        # Using .get() ensures the code doesn't crash if a weight is missing
+        score = (
+                self._dampen(z["concentration_z"]) * WEIGHTS.get("concentration", 0.4) +
+                gap_signal * WEIGHTS.get("gap_variance", 0.3) +
+                self._dampen(z["sentiment_var_z"]) * WEIGHTS.get("sentiment_var", 0.2) +
+                self._dampen(z["count_z"]) * WEIGHTS.get("count", 0.1)
         )
+
+        return round(score, 4)
+
