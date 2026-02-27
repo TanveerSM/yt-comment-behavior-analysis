@@ -1,16 +1,18 @@
 # sentiment.py
 
-from transformers import pipeline
-import torch
+from transformers import pipeline, AutoTokenizer
 
-# Load once globally (important)
+
+# Explicitly tell PyCharm this is a PreTrainedTokenizer
+my_tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
+
 sentiment_pipeline = pipeline(
     "sentiment-analysis",
     model="distilbert-base-uncased-finetuned-sst-2-english",
-    device=0 if torch.cuda.is_available() else -1,
-    truncation=True,
-    max_length=512
-)
+    tokenizer=my_tokenizer, # Pass specific object
+    device=0
+)  # type: ignore
+
 
 def sentiment_score(result):
     """

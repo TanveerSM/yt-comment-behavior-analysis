@@ -23,7 +23,7 @@ def fetch_comments(api_key, video_id, page_token=None):
         return None
 
 
-def fetch_all_comments(api_key, video_id):
+def fetch_all_comments(api_key, video_id, stop_at_id=None):
     page_token = None
     all_items = []
 
@@ -33,12 +33,18 @@ def fetch_all_comments(api_key, video_id):
             break
 
         items = data.get("items", [])
-        all_items.extend(items)
+
+        # Check if we've reached a comment we already have
+        for item in items:
+            if stop_at_id and item['id'] == stop_at_id:
+                return all_items  # Stop immediately and return what we found
+            all_items.append(item)
 
         page_token = data.get("nextPageToken")
-        time.sleep(0.1)
         if not page_token:
             break
+
+        time.sleep(0.1)
 
     return all_items
 

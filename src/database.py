@@ -1,9 +1,11 @@
 import sqlite3
 import os
 import statistics
+from datetime import datetime
 
-DB_PATH = "../data/comments.db"
 
+# Calculate the absolute path
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "comments.db"))
 
 def init_db():
     conn = get_connection()
@@ -39,17 +41,16 @@ def init_db():
     conn.close()
 
 def get_connection():
-    DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "comments.db")
-    DB_PATH = os.path.abspath(DB_PATH)
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     return sqlite3.connect(DB_PATH)
 
+
 def insert_comment(comment):
-    """
-    Insert a comment dict into the database.
-    Expects keys:
-      comment_id, video_id, author_id, text, published_at, fetched_at
-    """
+    # 1. Normalize timestamps to your preferred ISO format before inserting
+    # This ensures your BETWEEN queries in get_window_metrics always find matches.
+    comment["published_at"] = normalize_window(comment["published_at"])
+    comment["fetched_at"] = normalize_window(comment["fetched_at"])
+
     conn = get_connection()
     cur = conn.cursor()
 
@@ -75,72 +76,60 @@ def insert_comment(comment):
         )
         """, comment)
 
-        conn.commit()
+        conn.commit() # Safely saves the changes
 
     except sqlite3.IntegrityError:
-        # duplicate comment_id — ignore
+        # Handles duplicate comment_ids if you fetch the same data twice
         pass
 
     finally:
         conn.close()
 
 
+
 def get_window_metrics(start_time, end_time, video_id=None):
-    """
-    Aggregate metrics for comments in a time window.
-
-    If video_id is provided, filter metrics to that video.
-
-    Returns:
-        dict with:
-        - total_comments
-        - unique_authors
-        - avg_length
-        - avg_sentiment
-        - sentiment_variance
-    """
+    # Ensure start/end are both in the same ISO format
+    norm_start = normalize_window(start_time)
+    norm_end = normalize_window(end_time)
 
     conn = get_connection()
     cur = conn.cursor()
 
-    where_clause = "AND video_id = ?" if video_id else ""
-    params = (start_time, end_time, video_id) if video_id else (start_time, end_time)
+    where_clause = "WHERE published_at BETWEEN ? AND ?"
+    params = [norm_start, norm_end]
 
-    cur.execute(f"""
+    if video_id:
+        where_clause += " AND video_id = ?"
+        params.append(video_id)
+
+    query = f"""
         SELECT
             COUNT(*) AS total_comments,
             COUNT(DISTINCT author_id) AS unique_authors,
             AVG(LENGTH(text)) AS avg_length,
-            AVG(sentiment) AS avg_sentiment
+            AVG(sentiment) AS avg_sentiment,
+            AVG(sentiment * sentiment) - (AVG(sentiment) * AVG(sentiment)) AS sentiment_variance
         FROM comments
-        WHERE published_at BETWEEN ? AND ?
         {where_clause}
-    """, params)
+    """
 
+    cur.execute(query, params)
     row = cur.fetchone()
-
-    # variance
-    cur.execute(f"""
-        SELECT sentiment
-        FROM comments
-        WHERE published_at BETWEEN ? AND ?
-        AND sentiment IS NOT NULL
-        {where_clause}
-    """, params)
-
-    rows = cur.fetchall()
     conn.close()
 
-    sentiments = [r[0] for r in rows]
-    sentiment_variance = statistics.pvariance(sentiments) if len(sentiments) > 1 else 0
+    # Handle the case where no comments exist in the window
+    if not row or row[0] == 0:
+        return {"total_comments": 0, "unique_authors": 0, "avg_length": 0, "avg_sentiment": 0, "sentiment_variance": 0}
 
     return {
-        "total_comments": row[0] or 0,
-        "unique_authors": row[1] or 0,
+        "total_comments": row[0],
+        "unique_authors": row[1],
         "avg_length": row[2] or 0,
         "avg_sentiment": row[3] or 0,
-        "sentiment_variance": sentiment_variance
+        "sentiment_variance": max(0.0, row[4]) if row[4] is not None else 0.0
     }
+
+
 def get_all_window_metrics(video_id=None, polling_rate=600):
     conn = get_connection()
     cur = conn.cursor()
@@ -148,11 +137,12 @@ def get_all_window_metrics(video_id=None, polling_rate=600):
     where_clause = "WHERE video_id = ?" if video_id else ""
     params = (video_id,) if video_id else ()
 
-    # build window expression with polling_rate
-    window_expr = (
-        f"datetime((strftime('%s', published_at) / {polling_rate}) * {polling_rate}, 'unixepoch')"
-    )
+    # Inside get_all_window_metrics, change your window_expr to:
+    window_expr = f"datetime((unixepoch(published_at) / {polling_rate}) * {polling_rate}, 'unixepoch')"
+    # To keep it ISO, wrap it in strftime:
+    window_expr = f"strftime('%Y-%m-%dT%H:%M:%SZ', (unixepoch(published_at) / {polling_rate}) * {polling_rate}, 'unixepoch')"
 
+    # Calculate variance using: AVG(x*x) - AVG(x)*AVG(x)
     query = f"""
         SELECT
             video_id,
@@ -160,7 +150,8 @@ def get_all_window_metrics(video_id=None, polling_rate=600):
             COUNT(*) AS total_comments,
             COUNT(DISTINCT author_id) AS unique_authors,
             AVG(LENGTH(text)) AS avg_length,
-            AVG(sentiment) AS avg_sentiment
+            AVG(sentiment) AS avg_sentiment,
+            AVG(sentiment * sentiment) - (AVG(sentiment) * AVG(sentiment)) AS sentiment_variance
         FROM comments
         {where_clause}
         GROUP BY video_id, window
@@ -169,62 +160,19 @@ def get_all_window_metrics(video_id=None, polling_rate=600):
 
     cur.execute(query, params)
     rows = cur.fetchall()
-
-    results = []
-
-    for r in rows:
-        video = r[0]
-        window = r[1]
-
-        # same window expression for sentiment lookup
-        sentiment_window_expr = window_expr
-
-        cur.execute(f"""
-            SELECT sentiment
-            FROM comments
-            WHERE video_id = ?
-              AND {sentiment_window_expr} = ?
-              AND sentiment IS NOT NULL
-        """, (video, window))
-
-        sentiments = [s[0] for s in cur.fetchall()]
-        variance = statistics.pvariance(sentiments) if len(sentiments) > 1 else 0
-
-        results.append({
-            "video_id": video,
-            "window": window,
-            "total_comments": r[2],
-            "unique_authors": r[3],
-            "avg_length": r[4],
-            "avg_sentiment": r[5],
-            "sentiment_variance": variance
-        })
-
-    conn.close()
-    return results
-
-    conn.close()
-    return results
-
-
-def fetch_comments_by_video(video_id):
-    conn = get_connection()
-    cur = conn.cursor()
-
-
-    cur.execute("""
-        SELECT comment_id, text
-        FROM comments
-        WHERE video_id = ?
-    """, (video_id,))
-
-    rows = cur.fetchall()
     conn.close()
 
-    return [
-        {"comment_id": row[0], "text": row[1]}
-        for row in rows
-    ]
+    return [{
+        "video_id": r[0],
+        "window": r[1],
+        "total_comments": r[2],
+        "unique_authors": r[3],
+        "avg_length": r[4],
+        "avg_sentiment": r[5],
+        "sentiment_variance": max(0, r[6]) # max(0,...) prevents tiny floating point errors (< 0)
+    } for r in rows]
+
+
 
 def insert_window_metrics(metrics):
     """
@@ -278,20 +226,15 @@ def insert_window_metrics(metrics):
     conn.close()
 
 def normalize_window(window_str):
-    """
-    Normalize window timestamp to SQLite-friendly format:
-    'YYYY-MM-DD HH:MM:SS'
-
-    Accepts ISO timestamps with T/Z or SQLite format.
-    """
     try:
-        # handle ISO with timezone: 2026-02-26T20:38:35+00:00
+        # Standardize everything to a UTC datetime object
         dt = datetime.fromisoformat(window_str.replace("Z", "+00:00"))
-    except Exception:
+    except ValueError:
         try:
-            # already SQLite-style
             dt = datetime.strptime(window_str, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return window_str  # fallback (should rarely happen)
+        except ValueError:
+            return window_str
 
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    # Return as '2026-02-26T18:10:00+00:00'
+    return dt.isoformat(timespec='seconds')
+
