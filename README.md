@@ -11,16 +11,17 @@ Unlike standard sentiment tools, this system implements a dual-phase pipeline to
 graph LR
     API((YouTube API)) --> Mode{Mode}
     
-    subgraph "Analytics Pipeline"
-    Mode -- Batch --> Seg[Temporal Segmenting]
-    Mode -- Stream --> Poll[Interval Polling]
-    Seg & Poll --> NLP[HF Transformer]
+    subgraph Engine [Analytics Pipeline]
+    Mode -- Historical --> Win[Time Windowing]
+    Mode -- Live --> Poll[Delta Polling]
+    
+    Win & Poll --> NLP[Sentiment + Z-Scores]
     end
 
-    NLP --> Eng[Signal Detection]
-    Eng --> Out([Engagement Pulse])
+    NLP --> Out([Anomaly Alerts])
 
     style Out fill:#00ff9d,stroke:#000,stroke-width:2px,color:#000
+
 ```
 
 ### Phase 1: Historical Reconstruction
