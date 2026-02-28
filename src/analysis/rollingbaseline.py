@@ -35,13 +35,25 @@ class RollingBaseline:
         self.history["gap_vars"].append(metrics.get("gap_variance", 0))
 
     @staticmethod
-    def _safe_z(value, series):
-        if len(series) < 2:
-            return 0
-        stdev = statistics.pstdev(series)
-        if stdev == 0:
-            return 0
-        return (value - statistics.mean(series)) / stdev
+    def _safe_z(value, series, noise_floor=0.01):
+        if len(series) < 3: return 0
+
+        median = statistics.median(series)
+        deviations = [abs(x - median) for x in series]
+        mad = statistics.median(deviations)
+        consistent_mad = mad * 1.4826
+
+        # --- THE FIX ---
+        # If the historical variance is unreasonably tiny, force it to the noise_floor.
+        # This prevents normal human micro-fluctuations from exploding into massive Z-scores.
+        if consistent_mad < noise_floor:
+            consistent_mad = noise_floor
+
+        raw_z = (value - median) / consistent_mad
+
+        # Cap to prevent composite score blowout
+        return max(-20.0, min(20.0, raw_z))
+
 
     def evaluate(self, metrics):
         if len(self.history["counts"]) < self.warmup:
@@ -51,14 +63,19 @@ class RollingBaseline:
         authors = max(metrics.get("unique_authors", 1), 1)
 
         return {
-            "count_z": self._safe_z(total, self.history["counts"]),
-            "author_z": self._safe_z(authors, self.history["authors"]),
-            "length_z": self._safe_z(metrics.get("avg_length", 0), self.history["lengths"]),
-            "sentiment_z": self._safe_z(metrics.get("avg_sentiment", 0), self.history["sentiments"]),
-            "concentration_z": self._safe_z(total / authors, self.history["concentration"]),
-            "sentiment_var_z": self._safe_z(metrics.get("sentiment_variance", 0), self.history["sentiment_var"]),
-            "gap_z": self._safe_z(metrics.get("avg_gap", 0), self.history["avg_gaps"]),
-            "gap_var_z": self._safe_z(metrics.get("gap_variance", 0), self.history["gap_vars"]),
+            "count_z": self._safe_z(total, self.history["counts"], noise_floor=2.0),
+            "author_z": self._safe_z(authors, self.history["authors"], noise_floor=2.0),
+            "length_z": self._safe_z(metrics.get("avg_length", 0), self.history["lengths"], noise_floor=10.0),
+            "sentiment_z": self._safe_z(metrics.get("avg_sentiment", 0), self.history["sentiments"], noise_floor=0.1),
+
+            # A floor of 0.15 means the ratio has to jump to at least 1.38 before
+            # hitting a Z-score of 2.5 (the trigger for your alert).
+            "concentration_z": self._safe_z(total / authors, self.history["concentration"], noise_floor=0.15),
+
+            "sentiment_var_z": self._safe_z(metrics.get("sentiment_variance", 0), self.history["sentiment_var"],
+                                            noise_floor=0.05),
+            "gap_z": self._safe_z(metrics.get("avg_gap", 0), self.history["avg_gaps"], noise_floor=5.0),
+            "gap_var_z": self._safe_z(metrics.get("gap_variance", 0), self.history["gap_vars"], noise_floor=10.0),
         }
 
     @staticmethod

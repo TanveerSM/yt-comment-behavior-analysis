@@ -1,7 +1,9 @@
---extra-index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://download.pytorch.org/whl/cu124
 
 requests
 pandas
 numpy
 transformers
 torch
+sentence-transformers
+scikit-learn

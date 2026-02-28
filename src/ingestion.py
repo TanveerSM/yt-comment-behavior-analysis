@@ -7,7 +7,9 @@ def fetch_comments(api_key, video_id, page_token=None):
         "part": "snippet",
         "videoId": video_id,
         "key": api_key,
-        "maxResults": 100
+        "maxResults": 100,
+        "order": "time",
+        "textFormat": "plainText"
     }
 
     if page_token:
@@ -58,7 +60,7 @@ def parse_comment(item, video_id):
         "comment_id": item["id"],
         "video_id": video_id,
         "author_id": snippet.get("authorChannelId", {}).get("value"),
-        "text": snippet.get("textDisplay", ""),
+        "text": snippet.get("textOriginal", ""),
         "published_at": snippet.get("publishedAt"),
         "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     }

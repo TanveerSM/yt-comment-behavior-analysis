@@ -1,5 +1,6 @@
 YTAPI = "YOUR_YOUTUBE_API_KEY_HERE"
 YTAPIURL = "https://www.googleapis.com/youtube/v3/commentThreads"
+POLL_INTERVAL = 600 #10 minutes
 
 # --- Rolling Baseline Settings ---
 MAX_WINDOWS = 20    # How many 10-minute blocks to remember

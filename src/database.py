@@ -55,7 +55,10 @@ def init_db():
 
 def get_connection():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL;")  # Enables concurrent Readers/Writers
+    conn.execute("PRAGMA synchronous=NORMAL;") # Reduces fsync() calls
+    return conn
 
 
 def insert_comments_batch(comments):
